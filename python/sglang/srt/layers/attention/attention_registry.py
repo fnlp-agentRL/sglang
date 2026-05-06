@@ -62,6 +62,15 @@ def create_trtllm_mla_backend(runner):
     return TRTLLMMLABackend(runner)
 
 
+@register_attention_backend("cutedsl_mla")
+def create_cutedsl_mla_backend(runner):
+    if not runner.use_mla_backend:
+        raise ValueError("cutedsl_mla backend can only be used with MLA models.")
+    from sglang.srt.layers.attention.trtllm_mla_backend import TRTLLMMLABackend
+
+    return TRTLLMMLABackend(runner, backend="cute-dsl")
+
+
 @register_attention_backend("aiter")
 def create_aiter_backend(runner):
     from sglang.srt.layers.attention.aiter_backend import AiterAttnBackend

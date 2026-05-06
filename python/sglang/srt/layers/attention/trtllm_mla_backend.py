@@ -263,6 +263,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
         skip_prefill: bool = False,
         kv_indptr_buf: Optional[torch.Tensor] = None,
         q_indptr_decode_buf: Optional[torch.Tensor] = None,
+        backend: str = "trtllm-gen",
     ):
         super().__init__(
             model_runner,
@@ -286,6 +287,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
         self.kv_cache_dim = self.kv_lora_rank + self.qk_rope_head_dim
 
         # Runtime parameters
+        self.backend = backend
         self.scaling = config.scaling
         self.data_type = model_runner.kv_cache_dtype
         self.q_data_type = model_runner.dtype
@@ -878,6 +880,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             max_seq_len=metadata.max_seq_len_k,
             bmm1_scale=bmm1_scale,
             skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
+            backend=self.backend,
         )
 
         # Reshape output directly without slicing
@@ -1066,6 +1069,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 max_seq_len=max_seq_len,
                 bmm1_scale=bmm1_scale,
                 skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
+                backend=self.backend,
             )
 
             if needs_unpad:

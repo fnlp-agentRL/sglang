@@ -241,6 +241,7 @@ MLA_ATTENTION_BACKENDS = [
     "fa4",
     "triton",
     "flashmla",
+    "cutedsl_mla",
     "cutlass_mla",
     "trtllm_mla",
     "ascend",
@@ -253,6 +254,7 @@ CHUNKED_PREFIX_CACHE_SUPPORTED_ATTENTION_BACKENDS = [
     "fa3",
     "fa4",
     "flashmla",
+    "cutedsl_mla",
     "cutlass_mla",
     "trtllm_mla",
 ]
