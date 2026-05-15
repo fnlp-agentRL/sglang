@@ -635,6 +635,7 @@ class ServerArgs:
     # Context parallelism used in the long sequence prefill phase of DeepSeek v3.2
     enable_nsa_prefill_context_parallel: bool = False
     nsa_prefill_cp_mode: str = "round-robin-split"
+    disable_indexer_rope_neox_style: bool = False
     enable_fused_qk_norm_rope: bool = False
     enable_precise_embedding_interpolation: bool = False
 
@@ -4780,6 +4781,12 @@ class ServerArgs:
             choices=NSA_PREFILL_CP_SPLIT_CHOICES,
             help="Token splitting mode for the prefill phase of DeepSeek v3.2 under context parallelism. Optional values: 'round-robin-split'(default), 'in-seq-split'  "
             "'round-robin-split' distributes tokens across ranks based on token_idx %% cp_size. It supports multi-batch prefill, fused MoE, and FP8 KV cache.",
+        )
+        parser.add_argument(
+            "--disable-indexer-rope-neox-style",
+            action="store_true",
+            help="Disable NSA indexer RoPE neox style (equivalent to INDEXER_ROPE_NEOX_STYLE=0). "
+            "If the environment variable INDEXER_ROPE_NEOX_STYLE is also set and conflicts, an error is raised.",
         )
         parser.add_argument(
             "--enable-fused-qk-norm-rope",

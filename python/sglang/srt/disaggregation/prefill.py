@@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import deque
 from http import HTTPStatus
@@ -167,6 +168,7 @@ class PrefillBootstrapQueue:
         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
             self.metadata_buffers.get_buf_infos()
         )
+        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
         kv_args.gpu_id = self.scheduler.gpu_id
 
@@ -276,6 +278,12 @@ class PrefillBootstrapQueue:
             [req.disagg_kv_sender for req in self.queue], self.gloo_group
         )
 
+        # Bootstrap timeout: if a request has been stuck in Bootstrapping for too long, treat it as failed.
+        bootstrap_timeout = float(
+            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
+        )
+        now = time.perf_counter()
+
         for i, (req, poll) in enumerate(zip(self.queue, polls)):
             if rids_to_check is not None:
                 # if req not in reqs_info_to_check, skip
@@ -283,6 +291,27 @@ class PrefillBootstrapQueue:
                     continue
 
             if poll == KVPoll.Bootstrapping:
+                # Check for bootstrap timeout
+                entry_time = getattr(
+                    req.time_stats,
+                    "prefill_bootstrap_queue_entry_time",
+                    None,
+                )
+                if entry_time is not None and (now - entry_time) > bootstrap_timeout:
+                    error_message = (
+                        f"Prefill bootstrap timed out after {now - entry_time:.1f}s "
+                        f"for request rank={self.tp_rank} "
+                        f"{req.rid=} {req.bootstrap_room=}"
+                    )
+                    logger.error(error_message)
+                    prepare_abort(
+                        req, error_message, status_code=HTTPStatus.GATEWAY_TIMEOUT
+                    )
+                    self.scheduler.stream_output([req], req.return_logprob)
+                    indices_to_remove.add(i)
+                    failed_reqs.append(req)
+                    if self.scheduler.enable_metrics:
+                        self.scheduler.metrics_collector.increment_bootstrap_failed_reqs()
                 continue
             elif poll == KVPoll.Failed:
                 error_message = f"Prefill bootstrap failed for request rank={self.tp_rank} {req.rid=} {req.bootstrap_room=}"
@@ -334,6 +363,15 @@ class PrefillBootstrapQueue:
             return bootstrapped_reqs
         else:
             return bootstrapped_reqs, failed_reqs
+
+    def release_memory_occupation(self):
+        self.queue.clear()
+        if hasattr(self.kv_manager, "deregister_buffer_to_engine"):
+            self.kv_manager.deregister_buffer_to_engine()
+
+    def resume_memory_occupation(self):
+        if hasattr(self.kv_manager, "register_buffer_to_engine"):
+            self.kv_manager.register_buffer_to_engine()
 
 
 class SchedulerDisaggregationPrefillMixin:
@@ -547,6 +585,18 @@ class SchedulerDisaggregationPrefillMixin:
 
         self.maybe_send_health_check_signal()
 
+        if (
+            self.current_scheduler_metrics_enabled
+            and hasattr(batch, "prefill_stats")
+            and batch.prefill_stats is not None
+        ):
+            can_run_cuda_graph = getattr(result, "can_run_cuda_graph", False)
+            self.log_prefill_stats(
+                prefill_stats=batch.prefill_stats,
+                can_run_cuda_graph=can_run_cuda_graph,
+                dp_cooperation_info=getattr(batch, "dp_cooperation_info", None),
+            )
+
     def process_disagg_prefill_inflight_queue(
         self: Scheduler, rids_to_check: Optional[List[str]] = None
     ) -> List[Req]:
@@ -564,6 +614,13 @@ class SchedulerDisaggregationPrefillMixin:
             self.attn_tp_cpu_group,
         )
 
+        # Transfer timeout: if a request has been in the inflight queue for too long
+        # (e.g., stuck in WaitingForInput/Transferring), treat it as failed.
+        transfer_timeout = float(
+            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
+        )
+        now = time.perf_counter()
+
         undone_reqs: List[Req] = []
         # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
         for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
@@ -573,10 +630,35 @@ class SchedulerDisaggregationPrefillMixin:
                     undone_reqs.append(req)
                     continue
 
-                assert poll == KVPoll.Success or poll == KVPoll.Failed
+                if poll not in (KVPoll.Success, KVPoll.Failed):
+                    undone_reqs.append(req)
+                    continue
 
             if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
-                undone_reqs.append(req)
+                # Check for transfer timeout
+                entry_time = getattr(
+                    req.time_stats,
+                    "prefill_transfer_queue_entry_time",
+                    None,
+                )
+                if entry_time is not None and (now - entry_time) > transfer_timeout:
+                    error_message = (
+                        f"Prefill transfer timed out after {now - entry_time:.1f}s "
+                        f"(state={poll}) for request rank={self.tp_rank} "
+                        f"{req.rid=} {req.bootstrap_room=}"
+                    )
+                    logger.error(error_message)
+                    release_kv_cache(req, self.tree_cache)  # unlock the tree
+                    prepare_abort(
+                        req, error_message, status_code=HTTPStatus.GATEWAY_TIMEOUT
+                    )
+                    if hasattr(req.disagg_kv_sender, "clear"):
+                        req.disagg_kv_sender.clear()
+                    done_reqs.append(req)
+                    if self.enable_metrics:
+                        self.metrics_collector.increment_transfer_failed_reqs()
+                else:
+                    undone_reqs.append(req)
             elif poll == KVPoll.Success:  # transfer done
                 release_kv_cache(req, self.tree_cache)  # unlock the tree
                 req.finished_reason = FINISH_LENGTH(length=0)

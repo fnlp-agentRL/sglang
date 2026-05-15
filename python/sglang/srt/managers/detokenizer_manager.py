@@ -405,6 +405,17 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
             prefill_launch_delay=recv_obj.prefill_launch_delay,
             prefill_launch_latency=recv_obj.prefill_launch_latency,
             prefill_finished_ts=recv_obj.prefill_finished_ts,
+            pd_prefill_bootstrap_queue_duration=recv_obj.pd_prefill_bootstrap_queue_duration,
+            pd_prefill_forward_duration=recv_obj.pd_prefill_forward_duration,
+            pd_prefill_transfer_queue_duration=recv_obj.pd_prefill_transfer_queue_duration,
+            pd_decode_prealloc_duration=recv_obj.pd_decode_prealloc_duration,
+            pd_decode_transfer_duration=recv_obj.pd_decode_transfer_duration,
+            pd_decode_forward_duration=recv_obj.pd_decode_forward_duration,
+            pd_bootstrap_duration=recv_obj.pd_bootstrap_duration,
+            pd_alloc_waiting_duration=recv_obj.pd_alloc_waiting_duration,
+            pd_transfer_speed_gb_s=recv_obj.pd_transfer_speed_gb_s,
+            pd_transfer_total_mb=recv_obj.pd_transfer_total_mb,
+            pd_prefill_retry_count=recv_obj.pd_prefill_retry_count,
         )
 
     def handle_multimodal_decode_req(self, recv_obj: BatchMultimodalDecodeReq):

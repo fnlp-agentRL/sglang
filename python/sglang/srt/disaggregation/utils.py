@@ -21,6 +21,17 @@ if TYPE_CHECKING:
 # Constants & Enums
 #########################
 FAKE_BOOTSTRAP_HOST = "2.2.2.2"
+PREFILL_TIMING_AUX_BUFFER_NAME = "prefill_timing"
+PREFILL_TIMING_DEST_ATTRS = (
+    ("fwd_prefill_bootstrap_queue_duration", float),
+    ("fwd_prefill_forward_duration", float),
+    ("fwd_prefill_transfer_queue_duration", float),
+    ("fwd_bootstrap_duration", float),
+    ("fwd_alloc_waiting_duration", float),
+    ("fwd_transfer_speed_gb_s", float),
+    ("fwd_transfer_total_mb", float),
+    ("fwd_prefill_retry_count", int),
+)
 
 
 class DisaggregationMode(Enum):
@@ -139,45 +150,34 @@ class MetadataBuffers:
             self.bootstrap_room = torch.zeros(
                 (size, 8), dtype=torch.uint64, device=device
             )
+            # Prefill-side PD timing (8 floats, padded to 16 for RDMA alignment).
+            # Layout: [bootstrap_queue, forward, transfer_queue, bootstrap,
+            #          alloc_waiting, transfer_speed, transfer_mb, retry_count]
+            self.prefill_timing = torch.zeros(
+                (size, 16), dtype=torch.float32, device=device
+            )
+        self.aux_buffers = [
+            ("output_ids", self.output_ids),
+            ("cached_tokens", self.cached_tokens),
+            ("output_token_logprobs_val", self.output_token_logprobs_val),
+            ("output_token_logprobs_idx", self.output_token_logprobs_idx),
+            ("output_top_logprobs_val", self.output_top_logprobs_val),
+            ("output_top_logprobs_idx", self.output_top_logprobs_idx),
+            ("output_topk_p", self.output_topk_p),
+            ("output_topk_index", self.output_topk_index),
+            ("output_hidden_states", self.output_hidden_states),
+            ("bootstrap_room", self.bootstrap_room),
+            (PREFILL_TIMING_AUX_BUFFER_NAME, self.prefill_timing),
+        ]
 
     def get_buf_infos(self):
-        ptrs = [
-            self.output_ids.data_ptr(),
-            self.cached_tokens.data_ptr(),
-            self.output_token_logprobs_val.data_ptr(),
-            self.output_token_logprobs_idx.data_ptr(),
-            self.output_top_logprobs_val.data_ptr(),
-            self.output_top_logprobs_idx.data_ptr(),
-            self.output_topk_p.data_ptr(),
-            self.output_topk_index.data_ptr(),
-            self.output_hidden_states.data_ptr(),
-            self.bootstrap_room.data_ptr(),
-        ]
-        data_lens = [
-            self.output_ids.nbytes,
-            self.cached_tokens.nbytes,
-            self.output_token_logprobs_val.nbytes,
-            self.output_token_logprobs_idx.nbytes,
-            self.output_top_logprobs_val.nbytes,
-            self.output_top_logprobs_idx.nbytes,
-            self.output_topk_p.nbytes,
-            self.output_topk_index.nbytes,
-            self.output_hidden_states.nbytes,
-            self.bootstrap_room.nbytes,
-        ]
-        item_lens = [
-            self.output_ids[0].nbytes,
-            self.cached_tokens[0].nbytes,
-            self.output_token_logprobs_val[0].nbytes,
-            self.output_token_logprobs_idx[0].nbytes,
-            self.output_top_logprobs_val[0].nbytes,
-            self.output_top_logprobs_idx[0].nbytes,
-            self.output_topk_p[0].nbytes,
-            self.output_topk_index[0].nbytes,
-            self.output_hidden_states[0].nbytes,
-            self.bootstrap_room[0].nbytes,
-        ]
+        ptrs = [buffer.data_ptr() for _, buffer in self.aux_buffers]
+        data_lens = [buffer.nbytes for _, buffer in self.aux_buffers]
+        item_lens = [buffer[0].nbytes for _, buffer in self.aux_buffers]
         return ptrs, data_lens, item_lens
+
+    def get_aux_buffer_names(self):
+        return [name for name, _ in self.aux_buffers]
 
     def get_buf(self, idx: int):
         return (
@@ -191,7 +191,11 @@ class MetadataBuffers:
             self.output_topk_index[idx],
             self.output_hidden_states[idx],
             self.bootstrap_room[idx],
+            self.prefill_timing[idx],
         )
+
+    def clear_profiling_buf(self, idx: int):
+        self.prefill_timing[idx].zero_()
 
     def set_buf(self, req: Req):
 
@@ -237,6 +241,84 @@ class MetadataBuffers:
         self.bootstrap_room[req.metadata_buffer_index, 0] = (
             req.bootstrap_room if req.bootstrap_room is not None else 0
         )
+        # Pack prefill-side PD timing durations for transfer to decode instance.
+        # Note: set_buf is called at the START of the last KV chunk send, so
+        # completion_time and prefill_transfer_queue_entry_time are not yet set.
+        # We use time.perf_counter() as the "forward just completed" timestamp.
+        import time
+
+        ts = req.time_stats
+        timing = self.prefill_timing[req.metadata_buffer_index]
+        self.clear_profiling_buf(req.metadata_buffer_index)
+        if not is_slime_profiling_enabled():
+            return
+        for idx, value in enumerate(
+            build_prefill_timing_payload(ts, now=time.perf_counter())
+        ):
+            if value > 0:
+                timing[idx] = value
+
+
+def is_slime_profiling_enabled() -> bool:
+    return envs.SLIME_ENABLE_PROFILING.get()
+
+
+def build_prefill_timing_payload(time_stats, now: float) -> tuple[float, ...]:
+    bootstrap_queue_duration = 0.0
+    if (
+        time_stats.prefill_bootstrap_queue_entry_time > 0
+        and time_stats.wait_queue_entry_time > 0
+    ):
+        bootstrap_queue_duration = (
+            time_stats.wait_queue_entry_time
+            - time_stats.prefill_bootstrap_queue_entry_time
+        )
+
+    prefill_forward_duration = (
+        now - time_stats.forward_entry_time
+        if time_stats.forward_entry_time > 0
+        else 0.0
+    )
+
+    return (
+        bootstrap_queue_duration,
+        prefill_forward_duration,
+        0.0,
+        max(0.0, time_stats.bootstrap_duration),
+        max(0.0, time_stats.alloc_waiting_duration),
+        max(0.0, time_stats.transfer_speed_gb_s),
+        max(0.0, time_stats.transfer_total_mb),
+        float(max(0, time_stats.prefill_retry_count)),
+    )
+
+
+def apply_prefill_timing_payload(time_stats, timing) -> None:
+    for value, (attr_name, caster) in zip(
+        timing[: len(PREFILL_TIMING_DEST_ATTRS)].tolist(),
+        PREFILL_TIMING_DEST_ATTRS,
+    ):
+        if value > 0:
+            setattr(time_stats, attr_name, caster(value))
+
+
+def iter_aux_transfer_specs(
+    aux_buffer_names: list[str],
+    prefill_aux_ptrs: list[int],
+    prefill_aux_item_lens: list[int],
+    dst_aux_ptrs: list[int],
+    prefill_aux_index: int,
+    dst_aux_index: int,
+):
+    profiling_enabled = is_slime_profiling_enabled()
+    for i, (buffer_name, dst_aux_ptr) in enumerate(zip(aux_buffer_names, dst_aux_ptrs)):
+        if not profiling_enabled and buffer_name == PREFILL_TIMING_AUX_BUFFER_NAME:
+            continue
+        length = prefill_aux_item_lens[i]
+        if length <= 0:
+            continue
+        src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
+        dst_addr = dst_aux_ptr + length * dst_aux_index
+        yield i, src_addr, dst_addr, length
 
 
 #########################

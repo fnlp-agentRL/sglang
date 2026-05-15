@@ -333,6 +333,10 @@ class CommonKVReceiver(BaseKVReceiver):
             self.required_dst_info_num = (
                 self.kv_mgr.attn_tp_size // self.prefill_attn_tp_size
             )
+            # With attention DP, one request is routed to one decode rank.
+            # Waiting for all TP shards to pre-allocate the same bootstrap room would stall forever.
+            if self.kv_mgr.attn_dp_size > 1:
+                self.required_dst_info_num = 1
             self.required_prefill_response_num = 1 * (
                 self.prefill_pp_size // self.kv_mgr.pp_size
             )
@@ -422,6 +426,7 @@ class CommonKVReceiver(BaseKVReceiver):
                             f"Could not fetch bootstrap info for engine rank: {self.kv_mgr.kv_args.engine_rank} and target_dp_group: {self.target_dp_group} and target_pp_rank {target_pp_rank}",
                         )
                         self.kv_mgr.update_status(self.bootstrap_room, KVPoll.Failed)
+                        self.bootstrap_infos = None
                         return
 
             self.bootstrap_infos = bootstrap_infos
@@ -610,8 +615,12 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
             and int(target_dp_group) == -1
             and int(target_pp_rank) == -1
         ):
+            inferred_attn_tp_size = max(
+                (len(v) for v in self.prefill_port_table.values()),
+                default=self.attn_tp_size,
+            )
             prefill_parallel_info = {
-                "prefill_attn_tp_size": self.attn_tp_size,
+                "prefill_attn_tp_size": inferred_attn_tp_size,
                 "prefill_dp_size": self.dp_size,
                 "prefill_pp_size": self.pp_size,
                 "prefill_page_size": self.page_size,

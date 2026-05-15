@@ -922,6 +922,18 @@ class SchedulerOutputProcessorMixin:
         prefill_launch_delays = []
         prefill_launch_latencies = []
         prefill_finished_timestamps = []
+        profiling_enabled = envs.SLIME_ENABLE_PROFILING.get()
+        pd_prefill_bootstrap_queue_durations = [] if profiling_enabled else None
+        pd_prefill_forward_durations = [] if profiling_enabled else None
+        pd_prefill_transfer_queue_durations = [] if profiling_enabled else None
+        pd_decode_prealloc_durations = [] if profiling_enabled else None
+        pd_decode_transfer_durations = [] if profiling_enabled else None
+        pd_decode_forward_durations = [] if profiling_enabled else None
+        pd_bootstrap_durations = [] if profiling_enabled else None
+        pd_alloc_waiting_durations = [] if profiling_enabled else None
+        pd_transfer_speeds_gb_s = [] if profiling_enabled else None
+        pd_transfer_totals_mb = [] if profiling_enabled else None
+        pd_prefill_retry_counts = [] if profiling_enabled else None
 
         if return_logprob:
             input_token_logprobs_val = []
@@ -1037,6 +1049,40 @@ class SchedulerOutputProcessorMixin:
                 prefill_finished_timestamps.append(
                     req.time_stats.get_prefill_finished_ts()
                 )
+                if profiling_enabled:
+                    pd_prefill_bootstrap_queue_durations.append(
+                        req.time_stats.get_pd_prefill_bootstrap_queue_duration()
+                    )
+                    pd_prefill_forward_durations.append(
+                        req.time_stats.get_pd_prefill_forward_duration()
+                    )
+                    pd_prefill_transfer_queue_durations.append(
+                        req.time_stats.get_pd_prefill_transfer_queue_duration()
+                    )
+                    pd_decode_prealloc_durations.append(
+                        req.time_stats.get_pd_decode_prealloc_duration()
+                    )
+                    pd_decode_transfer_durations.append(
+                        req.time_stats.get_pd_decode_transfer_duration()
+                    )
+                    pd_decode_forward_durations.append(
+                        req.time_stats.get_pd_decode_forward_duration()
+                    )
+                    pd_bootstrap_durations.append(
+                        req.time_stats.get_pd_bootstrap_duration()
+                    )
+                    pd_alloc_waiting_durations.append(
+                        req.time_stats.get_pd_alloc_waiting_duration()
+                    )
+                    pd_transfer_speeds_gb_s.append(
+                        req.time_stats.get_pd_transfer_speed_gb_s()
+                    )
+                    pd_transfer_totals_mb.append(
+                        req.time_stats.get_pd_transfer_total_mb()
+                    )
+                    pd_prefill_retry_counts.append(
+                        req.time_stats.get_pd_prefill_retry_count()
+                    )
 
                 if not self.spec_algorithm.is_none():
                     spec_verify_ct.append(req.spec_verify_ct)
@@ -1134,7 +1180,7 @@ class SchedulerOutputProcessorMixin:
                 req.log_time_stats()
 
         # Send to detokenizer
-        if reqs or is_idle_batch:
+        if rids or is_idle_batch:
             if self.model_config.is_multimodal_gen:
                 return
             self.send_to_detokenizer.send_output(
@@ -1149,6 +1195,17 @@ class SchedulerOutputProcessorMixin:
                     prefill_launch_delay=prefill_launch_delays,
                     prefill_launch_latency=prefill_launch_latencies,
                     prefill_finished_ts=prefill_finished_timestamps,
+                    pd_prefill_bootstrap_queue_duration=pd_prefill_bootstrap_queue_durations,
+                    pd_prefill_forward_duration=pd_prefill_forward_durations,
+                    pd_prefill_transfer_queue_duration=pd_prefill_transfer_queue_durations,
+                    pd_decode_prealloc_duration=pd_decode_prealloc_durations,
+                    pd_decode_transfer_duration=pd_decode_transfer_durations,
+                    pd_decode_forward_duration=pd_decode_forward_durations,
+                    pd_bootstrap_duration=pd_bootstrap_durations,
+                    pd_alloc_waiting_duration=pd_alloc_waiting_durations,
+                    pd_transfer_speed_gb_s=pd_transfer_speeds_gb_s,
+                    pd_transfer_total_mb=pd_transfer_totals_mb,
+                    pd_prefill_retry_count=pd_prefill_retry_counts,
                     finished_reasons=finished_reasons,
                     decoded_texts=decoded_texts,
                     decode_ids=decode_ids_list,
@@ -1198,6 +1255,18 @@ class SchedulerOutputProcessorMixin:
         prefill_launch_delays = []
         prefill_launch_latencies = []
         prefill_finished_timestamps = []
+        profiling_enabled = envs.SLIME_ENABLE_PROFILING.get()
+        pd_prefill_bootstrap_queue_durations = [] if profiling_enabled else None
+        pd_prefill_forward_durations = [] if profiling_enabled else None
+        pd_prefill_transfer_queue_durations = [] if profiling_enabled else None
+        pd_decode_prealloc_durations = [] if profiling_enabled else None
+        pd_decode_transfer_durations = [] if profiling_enabled else None
+        pd_decode_forward_durations = [] if profiling_enabled else None
+        pd_bootstrap_durations = [] if profiling_enabled else None
+        pd_alloc_waiting_durations = [] if profiling_enabled else None
+        pd_transfer_speeds_gb_s = [] if profiling_enabled else None
+        pd_transfer_totals_mb = [] if profiling_enabled else None
+        pd_prefill_retry_counts = [] if profiling_enabled else None
         retraction_counts = []
         for req in reqs:
             if req.finished():
@@ -1221,6 +1290,40 @@ class SchedulerOutputProcessorMixin:
                 prefill_finished_timestamps.append(
                     req.time_stats.get_prefill_finished_ts()
                 )
+                if profiling_enabled:
+                    pd_prefill_bootstrap_queue_durations.append(
+                        req.time_stats.get_pd_prefill_bootstrap_queue_duration()
+                    )
+                    pd_prefill_forward_durations.append(
+                        req.time_stats.get_pd_prefill_forward_duration()
+                    )
+                    pd_prefill_transfer_queue_durations.append(
+                        req.time_stats.get_pd_prefill_transfer_queue_duration()
+                    )
+                    pd_decode_prealloc_durations.append(
+                        req.time_stats.get_pd_decode_prealloc_duration()
+                    )
+                    pd_decode_transfer_durations.append(
+                        req.time_stats.get_pd_decode_transfer_duration()
+                    )
+                    pd_decode_forward_durations.append(
+                        req.time_stats.get_pd_decode_forward_duration()
+                    )
+                    pd_bootstrap_durations.append(
+                        req.time_stats.get_pd_bootstrap_duration()
+                    )
+                    pd_alloc_waiting_durations.append(
+                        req.time_stats.get_pd_alloc_waiting_duration()
+                    )
+                    pd_transfer_speeds_gb_s.append(
+                        req.time_stats.get_pd_transfer_speed_gb_s()
+                    )
+                    pd_transfer_totals_mb.append(
+                        req.time_stats.get_pd_transfer_total_mb()
+                    )
+                    pd_prefill_retry_counts.append(
+                        req.time_stats.get_pd_prefill_retry_count()
+                    )
                 retraction_counts.append(req.retraction_count)
         self.send_to_detokenizer.send_output(
             BatchEmbeddingOutput(
@@ -1231,6 +1334,17 @@ class SchedulerOutputProcessorMixin:
                 prefill_launch_delay=prefill_launch_delays,
                 prefill_launch_latency=prefill_launch_latencies,
                 prefill_finished_ts=prefill_finished_timestamps,
+                pd_prefill_bootstrap_queue_duration=pd_prefill_bootstrap_queue_durations,
+                pd_prefill_forward_duration=pd_prefill_forward_durations,
+                pd_prefill_transfer_queue_duration=pd_prefill_transfer_queue_durations,
+                pd_decode_prealloc_duration=pd_decode_prealloc_durations,
+                pd_decode_transfer_duration=pd_decode_transfer_durations,
+                pd_decode_forward_duration=pd_decode_forward_durations,
+                pd_bootstrap_duration=pd_bootstrap_durations,
+                pd_alloc_waiting_duration=pd_alloc_waiting_durations,
+                pd_transfer_speed_gb_s=pd_transfer_speeds_gb_s,
+                pd_transfer_total_mb=pd_transfer_totals_mb,
+                pd_prefill_retry_count=pd_prefill_retry_counts,
                 finished_reasons=finished_reasons,
                 embeddings=embeddings,
                 prompt_tokens=prompt_tokens,

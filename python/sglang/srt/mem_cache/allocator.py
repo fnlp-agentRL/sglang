@@ -411,7 +411,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         self.seen_max_num_extend_tokens_next_power_of_2 = max(
             self.seen_max_num_extend_tokens_next_power_of_2,
-            min(tl.core.TRITON_MAX_TENSOR_NUMEL, next_power_of_2(extend_num_tokens)),
+            min(65536, next_power_of_2(extend_num_tokens)),
         )
 
         bs = len(prefix_lens)
@@ -424,7 +424,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             (extend_num_tokens,), dtype=torch.int64, device=self.device
         )
 
-        if extend_num_tokens < tl.core.TRITON_MAX_TENSOR_NUMEL:
+        if extend_num_tokens < 65536:
             alloc_extend_kernel[(bs,)](
                 prefix_lens,
                 seq_lens,

@@ -101,6 +101,42 @@ class RequestTimingMetricsMixin:
     # This marks when the prefill computation finishes.
     prefill_finished_ts: Optional[List[Optional[float]]]
 
+    # --- PD disaggregation timing fields ---
+    # All fields are None when profiling is disabled or not in PD disaggregation mode.
+
+    # P instance: duration spent in bootstrap queue before entering the wait queue.
+    pd_prefill_bootstrap_queue_duration: Optional[List[Optional[float]]]
+
+    # P instance: duration for the actual prefill forward computation.
+    pd_prefill_forward_duration: Optional[List[Optional[float]]]
+
+    # P instance: duration spent in the KV transfer queue.
+    pd_prefill_transfer_queue_duration: Optional[List[Optional[float]]]
+
+    # D instance: duration waiting for KV cache slot pre-allocation.
+    pd_decode_prealloc_duration: Optional[List[Optional[float]]]
+
+    # D instance: duration waiting for the KV cache transfer to complete.
+    pd_decode_transfer_duration: Optional[List[Optional[float]]]
+
+    # D instance: duration for the actual decode forward computation.
+    pd_decode_forward_duration: Optional[List[Optional[float]]]
+
+    # Bootstrap handshake duration (P and D instances).
+    pd_bootstrap_duration: Optional[List[Optional[float]]]
+
+    # KV cache allocation waiting duration (P and D instances).
+    pd_alloc_waiting_duration: Optional[List[Optional[float]]]
+
+    # KV cache transfer speed in GB/s.
+    pd_transfer_speed_gb_s: Optional[List[Optional[float]]]
+
+    # Total KV cache transferred in MB.
+    pd_transfer_total_mb: Optional[List[Optional[float]]]
+
+    # Number of prefill retries (P instance only).
+    pd_prefill_retry_count: Optional[List[Optional[int]]]
+
 
 @dataclass
 class SpeculativeDecodingMetricsMixin:
@@ -1404,6 +1440,20 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
 
 
 @dataclass
+class PostProcessWeightsReqInput(BaseReq):
+    # Whether to restore weights before loading new weights
+    restore_weights_before_load: bool = False
+    # Whether to enable quantization post-processing
+    post_process_quantization: bool = False
+
+
+@dataclass
+class PostProcessWeightsReqOutput(BaseReq):
+    success: bool
+    message: str
+
+
+@dataclass
 class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
     success: bool
     message: str
@@ -1802,6 +1852,10 @@ class GetLoadReqOutput(BaseReq):
     num_waiting_reqs: int
     num_tokens: int
     ts_tic: float
+    # Per-queue breakdown: list of {name, num_reqs, num_tokens, reqs: [{rid, seqlen, input_len, output_len}]}
+    queue_details: Optional[List[Dict[str, Any]]] = None
+    # Running batch info
+    running_details: Optional[Dict[str, Any]] = None
 
 
 @dataclass

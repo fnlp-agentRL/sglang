@@ -1327,7 +1327,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         async with self.is_pause_cond:
             self.is_pause = True
             if obj.mode != "abort":
-                await self.send_to_scheduler.send_pyobj(obj)
+                self.send_to_scheduler.send_pyobj(obj)
             else:
                 # we are using the model_update_lock to check if there is still on-going requests.
                 while True:
@@ -1341,7 +1341,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
     async def continue_generation(self, obj: ContinueGenerationReqInput):
         async with self.is_pause_cond:
             self.is_pause = False
-            await self.send_to_scheduler.send_pyobj(obj)
+            self.send_to_scheduler.send_pyobj(obj)
             self.is_pause_cond.notify_all()
 
     async def update_weights_from_disk(
@@ -1509,6 +1509,40 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                 )
                 self._add_metric_if_present(
                     recv_obj, "prefill_finished_ts", meta_info, i
+                )
+                # PD disaggregation timing
+                self._add_metric_if_present(
+                    recv_obj, "pd_prefill_bootstrap_queue_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_prefill_forward_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_prefill_transfer_queue_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_decode_prealloc_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_decode_transfer_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_decode_forward_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_bootstrap_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_alloc_waiting_duration", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_transfer_speed_gb_s", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_transfer_total_mb", meta_info, i
+                )
+                self._add_metric_if_present(
+                    recv_obj, "pd_prefill_retry_count", meta_info, i
                 )
 
             if getattr(state.obj, "return_logprob", False):
@@ -1955,19 +1989,17 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             if custom_labels
             else self.metrics_collector.labels
         )
-        if (
-            state.first_token_time == 0.0
-            and self.disaggregation_mode != DisaggregationMode.PREFILL
-        ):
+        if state.first_token_time == 0.0:
             state.first_token_time = state.last_time = time.time()
             state.first_token_time_perf = time.perf_counter()
             state.last_completion_tokens = completion_tokens
-            self.metrics_collector.observe_time_to_first_token(
-                labels, state.first_token_time - state.created_time
-            )
+            if self.disaggregation_mode != DisaggregationMode.PREFILL:
+                self.metrics_collector.observe_time_to_first_token(
+                    labels, state.first_token_time - state.created_time
+                )
         else:
             num_new_tokens = completion_tokens - state.last_completion_tokens
-            if num_new_tokens:
+            if num_new_tokens > 0:
                 new_time = time.time()
                 interval = new_time - state.last_time
                 self.metrics_collector.observe_inter_token_latency(
@@ -1976,7 +2008,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                     num_new_tokens,
                 )
                 state.last_time = new_time
-                state.last_completion_tokens = completion_tokens
+            state.last_completion_tokens = completion_tokens
 
         if state.finished:
             retraction_count = (

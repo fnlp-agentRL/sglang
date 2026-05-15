@@ -20,7 +20,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-from sglang.srt.disaggregation.utils import DisaggregationMode
+from sglang.srt.disaggregation.utils import (
+    DisaggregationMode,
+    is_slime_profiling_enabled,
+)
 from sglang.srt.environ import envs
 from sglang.srt.metrics.utils import exponential_buckets, generate_buckets
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
@@ -77,6 +80,17 @@ class TimeStats:
     # Number of prefill retries for this request
     prefill_retry_count: int = 0
 
+    # Prefill-side durations forwarded via metadata transfer from P to D instance.
+    # Set on the decode instance after KV cache transfer completes.
+    fwd_prefill_bootstrap_queue_duration: Optional[float] = None
+    fwd_prefill_forward_duration: Optional[float] = None
+    fwd_prefill_transfer_queue_duration: Optional[float] = None
+    fwd_bootstrap_duration: Optional[float] = None
+    fwd_alloc_waiting_duration: Optional[float] = None
+    fwd_transfer_speed_gb_s: Optional[float] = None
+    fwd_transfer_total_mb: Optional[float] = None
+    fwd_prefill_retry_count: Optional[int] = None
+
     # Timestamp when prefill phase finishes, obtained from `time.time()`.
     # Note that this differs from the other `_time` fields tracked by the
     # `TimeStats` class, which are obtained from `time.perf_counter()`.
@@ -100,6 +114,148 @@ class TimeStats:
     def get_prefill_finished_ts(self) -> Optional[float]:
         if self.prefill_finished_ts > 0.0:
             return self.prefill_finished_ts
+        return None
+
+    # --- PD disaggregation timing getters ---
+
+    def get_pd_prefill_bootstrap_queue_duration(self) -> Optional[float]:
+        """P instance: time spent in bootstrap queue before entering the wait queue."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_prefill_bootstrap_queue_duration is not None:
+            return self.fwd_prefill_bootstrap_queue_duration
+        if (
+            self.disagg_mode == DisaggregationMode.PREFILL
+            and self.prefill_bootstrap_queue_entry_time > 0.0
+            and self.wait_queue_entry_time > 0.0
+        ):
+            return self.wait_queue_entry_time - self.prefill_bootstrap_queue_entry_time
+        return None
+
+    def get_pd_prefill_forward_duration(self) -> Optional[float]:
+        """P instance: time for the actual prefill forward computation."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_prefill_forward_duration is not None:
+            return self.fwd_prefill_forward_duration
+        if (
+            self.disagg_mode == DisaggregationMode.PREFILL
+            and self.forward_entry_time > 0.0
+            and self.completion_time > 0.0
+        ):
+            return self.completion_time - self.forward_entry_time
+        return None
+
+    def get_pd_prefill_transfer_queue_duration(self) -> Optional[float]:
+        """P instance: time spent in the transfer queue (KV cache send)."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_prefill_transfer_queue_duration is not None:
+            return self.fwd_prefill_transfer_queue_duration
+        if (
+            self.disagg_mode == DisaggregationMode.PREFILL
+            and self.prefill_transfer_queue_entry_time > 0.0
+            and self.completion_time > 0.0
+        ):
+            return self.completion_time - self.prefill_transfer_queue_entry_time
+        return None
+
+    def get_pd_decode_prealloc_duration(self) -> Optional[float]:
+        """D instance: time spent in the pre-alloc queue (waiting for KV cache slot allocation)."""
+        if not is_slime_profiling_enabled():
+            return None
+        if (
+            self.disagg_mode == DisaggregationMode.DECODE
+            and self.decode_prealloc_queue_entry_time > 0.0
+            and self.decode_transfer_queue_entry_time > 0.0
+        ):
+            return (
+                self.decode_transfer_queue_entry_time
+                - self.decode_prealloc_queue_entry_time
+            )
+        return None
+
+    def get_pd_decode_transfer_duration(self) -> Optional[float]:
+        """D instance: time spent waiting for KV cache transfer to complete."""
+        if not is_slime_profiling_enabled():
+            return None
+        if (
+            self.disagg_mode == DisaggregationMode.DECODE
+            and self.decode_transfer_queue_entry_time > 0.0
+            and self.wait_queue_entry_time > 0.0
+        ):
+            return self.wait_queue_entry_time - self.decode_transfer_queue_entry_time
+        return None
+
+    def get_pd_decode_forward_duration(self) -> Optional[float]:
+        """D instance: time for the actual decode forward computation."""
+        if not is_slime_profiling_enabled():
+            return None
+        if (
+            self.disagg_mode == DisaggregationMode.DECODE
+            and self.forward_entry_time > 0.0
+            and self.completion_time > 0.0
+        ):
+            return self.completion_time - self.forward_entry_time
+        return None
+
+    def get_pd_bootstrap_duration(self) -> Optional[float]:
+        """Bootstrap handshake duration (both P and D instances)."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_bootstrap_duration is not None:
+            return self.fwd_bootstrap_duration
+        if (
+            self.disagg_mode != DisaggregationMode.NULL
+            and self.bootstrap_duration > 0.0
+        ):
+            return self.bootstrap_duration
+        return None
+
+    def get_pd_alloc_waiting_duration(self) -> Optional[float]:
+        """KV cache allocation waiting duration (both P and D instances)."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_alloc_waiting_duration is not None:
+            return self.fwd_alloc_waiting_duration
+        if (
+            self.disagg_mode != DisaggregationMode.NULL
+            and self.alloc_waiting_duration > 0.0
+        ):
+            return self.alloc_waiting_duration
+        return None
+
+    def get_pd_transfer_speed_gb_s(self) -> Optional[float]:
+        """KV cache transfer speed in GB/s."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_transfer_speed_gb_s is not None:
+            return self.fwd_transfer_speed_gb_s
+        if (
+            self.disagg_mode != DisaggregationMode.NULL
+            and self.transfer_speed_gb_s > 0.0
+        ):
+            return self.transfer_speed_gb_s
+        return None
+
+    def get_pd_transfer_total_mb(self) -> Optional[float]:
+        """Total KV cache transferred in MB."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_transfer_total_mb is not None:
+            return self.fwd_transfer_total_mb
+        if self.disagg_mode != DisaggregationMode.NULL and self.transfer_total_mb > 0.0:
+            return self.transfer_total_mb
+        return None
+
+    def get_pd_prefill_retry_count(self) -> Optional[int]:
+        """Number of prefill retries for this request."""
+        if not is_slime_profiling_enabled():
+            return None
+        if self.fwd_prefill_retry_count is not None:
+            return self.fwd_prefill_retry_count
+        if self.disagg_mode == DisaggregationMode.PREFILL:
+            return self.prefill_retry_count
         return None
 
     def convert_to_duration(self) -> str:

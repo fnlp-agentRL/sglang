@@ -21,6 +21,7 @@ Life cycle of a request in the decode server
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -40,8 +41,10 @@ from sglang.srt.disaggregation.utils import (
     MetadataBuffers,
     ReqToMetadataIdxAllocator,
     TransferBackend,
+    apply_prefill_timing_payload,
     get_kv_class,
     is_mla_backend,
+    is_slime_profiling_enabled,
     kv_to_page_indices,
     poll_and_all_reduce,
     prepare_abort,
@@ -295,6 +298,7 @@ class DecodePreallocQueue:
         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
             self.metadata_buffers.get_buf_infos()
         )
+        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
 
         if hasattr(self.token_to_kv_pool, "get_state_buf_infos"):
             state_data_ptrs, state_data_lens, state_item_lens = (
@@ -335,6 +339,16 @@ class DecodePreallocQueue:
             self.is_mla_backend,
         )
         return kv_manager
+
+    def release_memory_occupation(self):
+        self.queue.clear()
+        self.retracted_queue.clear()
+        if hasattr(self.kv_manager, "deregister_buffer_to_engine"):
+            self.kv_manager.deregister_buffer_to_engine()
+
+    def resume_memory_occupation(self):
+        if hasattr(self.kv_manager, "register_buffer_to_engine"):
+            self.kv_manager.register_buffer_to_engine()
 
     def add(self, req: Req, is_retracted: bool = False) -> None:
         """Add a request to the pending queue."""
@@ -440,12 +454,37 @@ class DecodePreallocQueue:
             [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
         )
 
+        # Bootstrap timeout: if a request has been stuck in Bootstrapping for too long, treat it as failed.
+        bootstrap_timeout = float(
+            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
+        )
+        now = time.perf_counter()
+
         for i, (decode_req, poll) in enumerate(zip(self.queue, polls)):
             if rids_to_check is not None and decode_req.req.rid not in rids_to_check:
                 continue
 
             if poll == KVPoll.Bootstrapping:
-                pass
+                # Check for bootstrap timeout
+                entry_time = getattr(
+                    decode_req.req.time_stats,
+                    "decode_prealloc_queue_entry_time",
+                    None,
+                )
+                if entry_time is not None and (now - entry_time) > bootstrap_timeout:
+                    error_message = (
+                        f"Decode bootstrap timed out after {now - entry_time:.1f}s "
+                        f"for request rank={self.tp_rank} "
+                        f"{decode_req.req.rid=} {decode_req.req.bootstrap_room=}"
+                    )
+                    logger.error(error_message)
+                    prepare_abort(
+                        decode_req.req,
+                        error_message,
+                        status_code=HTTPStatus.GATEWAY_TIMEOUT,
+                    )
+                    if self.scheduler.enable_metrics:
+                        self.scheduler.metrics_collector.increment_bootstrap_failed_reqs()
             elif poll == KVPoll.WaitingForInput:
                 decode_req.waiting_for_input = True
             elif poll == KVPoll.Failed:
@@ -590,6 +629,7 @@ class DecodePreallocQueue:
                 self.req_to_metadata_buffer_idx_allocator.alloc()
             )
             assert decode_req.metadata_buffer_index is not None
+            self.metadata_buffers.clear_profiling_buf(decode_req.metadata_buffer_index)
             page_indices = kv_to_page_indices(kv_indices, page_size)
             decode_req.kv_receiver.init(
                 page_indices, decode_req.metadata_buffer_index, state_indices
@@ -751,6 +791,7 @@ class DecodeTransferQueue:
             output_topk_index,
             output_hidden_states,
             output_bootstrap_room,
+            output_prefill_timing,
         ) = self.metadata_buffers.get_buf(idx)
 
         # Validate bootstrap_room to detect context corruption
@@ -813,6 +854,14 @@ class DecodeTransferQueue:
                 output_top_logprobs_idx[: decode_req.req.top_logprobs_num].tolist()
             )
 
+        # Inject prefill-side PD timing forwarded from the P instance.
+        # Layout: [bootstrap_queue, forward, transfer_queue, bootstrap,
+        #          alloc_waiting, transfer_speed, transfer_mb, retry_count]
+        if is_slime_profiling_enabled():
+            apply_prefill_timing_payload(
+                decode_req.req.time_stats, output_prefill_timing
+            )
+
         decode_req.kv_receiver.clear()
         decode_req.kv_receiver = None
         trace_slice_end(
@@ -829,6 +878,13 @@ class DecodeTransferQueue:
         polls = poll_and_all_reduce(
             [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
         )
+
+        # Transfer timeout: if a request has been in the transfer queue for too long
+        # (e.g., stuck in Bootstrapping/WaitingForInput/Transferring), treat it as failed.
+        transfer_timeout = float(
+            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
+        )
+        now = time.perf_counter()
 
         transferred_reqs = []
         indices_to_remove = set()
@@ -877,7 +933,20 @@ class DecodeTransferQueue:
                 KVPoll.WaitingForInput,
                 KVPoll.Transferring,
             ]:
-                pass
+                # Check for transfer timeout
+                entry_time = getattr(
+                    decode_req.req.time_stats,
+                    "decode_transfer_queue_entry_time",
+                    None,
+                )
+                if entry_time is not None and (now - entry_time) > transfer_timeout:
+                    error_message = (
+                        f"Decode transfer timed out after {now - entry_time:.1f}s "
+                        f"(state={poll}) for request rank={self.tp_rank} "
+                        f"{decode_req.req.rid=} {decode_req.req.bootstrap_room=}"
+                    )
+                    logger.error(error_message)
+                    decode_req.kv_receiver.abort()
             else:
                 raise ValueError(f"Unexpected poll case: {poll}")
 
@@ -892,6 +961,14 @@ class DecodeTransferQueue:
         ]
 
         return transferred_reqs
+
+    def release_memory_occupation(self):
+        """Clean up all in-flight transfers before releasing GPU memory."""
+        self.queue.clear()
+
+    def resume_memory_occupation(self):
+        """Resume after GPU memory re-allocation. Queue was already cleared on release."""
+        pass
 
 
 class SchedulerDisaggregationDecodeMixin:
@@ -1072,7 +1149,15 @@ class SchedulerDisaggregationDecodeMixin:
         resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
         self.waiting_queue.extend(resumed_reqs)
         if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
-            # if there are still retracted requests, we do not allocate new requests
+            # Still have retracted requests that couldn't resume (not enough memory).
+            # Don't accept new requests (pop_preallocated) — they would consume memory
+            # that retracted requests need.
+            # But DO drain completed transfers: their KV is already committed, and
+            # moving them to waiting_queue frees the reserved-decode-token budget
+            # in _allocatable_tokens(), which may unblock resume on the next iteration.
+            # Without this, completed transfers hold memory indefinitely → deadlock.
+            alloc_reqs = self.disagg_decode_transfer_queue.pop_transferred()
+            self.waiting_queue.extend(alloc_reqs)
             return
 
         if not hasattr(self, "polling_count"):

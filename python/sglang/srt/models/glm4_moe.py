@@ -678,8 +678,13 @@ class Glm4MoeDecoderLayer(nn.Module):
         nn.Module.__init__(self)
         self.hidden_size = config.hidden_size
         self.config = config
-        rope_theta = getattr(config, "rope_theta", 10000)
-        rope_scaling = getattr(config, "rope_scaling", None)
+        # rope_theta may be stored in rope_parameters dict (e.g. GLM-4.6V)
+        _rope_params = getattr(config, "rope_parameters", None)
+        if isinstance(_rope_params, dict) and "rope_theta" in _rope_params:
+            rope_theta = _rope_params["rope_theta"]
+        else:
+            rope_theta = getattr(config, "rope_theta", 10000)
+        rope_scaling = getattr(config, "rope_scaling", None) or _rope_params
         partial_rotary_factor = getattr(
             getattr(config, "rope_parameters", None), "partial_rotary_factor", None
         ) or getattr(config, "partial_rotary_factor", 0.5)
@@ -773,6 +778,7 @@ class Glm4MoeDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
+        **kwargs,
     ) -> torch.Tensor:
 
         hidden_states, residual = self.layer_communicator.prepare_attn(

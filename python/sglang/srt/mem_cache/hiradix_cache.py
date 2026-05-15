@@ -750,9 +750,8 @@ class HiRadixCache(RadixCache):
             self._update_leaf_status(node)
             self._update_host_leaf_status(node)
             if node.parent is None:
-                assert (
-                    node is self.root_node
-                ), f"This request holds the node from another tree"
+                # Node belongs to a stale (flushed) tree — stop traversal gracefully.
+                break
             node = node.parent
         return delta
 
@@ -827,6 +826,7 @@ class HiRadixCache(RadixCache):
         self._update_host_leaf_status(node)
         # update leaf status for the parent because the node is evicted
         self._update_leaf_status(node.parent)
+        self._update_host_leaf_status(node.parent)
         return num_evicted
 
     def _evict_regular(self, node: TreeNode):
@@ -1330,6 +1330,7 @@ class HiRadixCache(RadixCache):
                     self._update_host_leaf_status(node)
                     # update parent status as a new leaf is added into device
                     self._update_leaf_status(node.parent)
+                    self._update_host_leaf_status(node.parent)
                 else:
                     self._inc_hit_count(node, chunked)
                     total_prefix_length += prefix_len
@@ -1345,6 +1346,7 @@ class HiRadixCache(RadixCache):
                     self._update_host_leaf_status(new_node)
                     # update parent status as a new leaf is added into device
                     self._update_leaf_status(new_node.parent)
+                    self._update_host_leaf_status(new_node.parent)
                 else:
                     self._inc_hit_count(new_node, chunked)
                     total_prefix_length += prefix_len

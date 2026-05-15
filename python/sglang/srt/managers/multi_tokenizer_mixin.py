@@ -142,6 +142,39 @@ def _handle_output_by_index(output, i):
             prefill_finished_ts=_extract_field_by_index(
                 output, "prefill_finished_ts", i
             ),
+            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_bootstrap_queue_duration", i
+            ),
+            pd_prefill_forward_duration=_extract_field_by_index(
+                output, "pd_prefill_forward_duration", i
+            ),
+            pd_prefill_transfer_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_transfer_queue_duration", i
+            ),
+            pd_decode_prealloc_duration=_extract_field_by_index(
+                output, "pd_decode_prealloc_duration", i
+            ),
+            pd_decode_transfer_duration=_extract_field_by_index(
+                output, "pd_decode_transfer_duration", i
+            ),
+            pd_decode_forward_duration=_extract_field_by_index(
+                output, "pd_decode_forward_duration", i
+            ),
+            pd_bootstrap_duration=_extract_field_by_index(
+                output, "pd_bootstrap_duration", i
+            ),
+            pd_alloc_waiting_duration=_extract_field_by_index(
+                output, "pd_alloc_waiting_duration", i
+            ),
+            pd_transfer_speed_gb_s=_extract_field_by_index(
+                output, "pd_transfer_speed_gb_s", i
+            ),
+            pd_transfer_total_mb=_extract_field_by_index(
+                output, "pd_transfer_total_mb", i
+            ),
+            pd_prefill_retry_count=_extract_field_by_index(
+                output, "pd_prefill_retry_count", i
+            ),
             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
             decoded_texts=_extract_field_by_index(output, "decoded_texts", i),
             decode_ids=_extract_field_by_index(output, "decode_ids", i),
@@ -211,6 +244,50 @@ def _handle_output_by_index(output, i):
     elif isinstance(output, BatchEmbeddingOutput):
         new_output = BatchEmbeddingOutput(
             rids=[output.rids[i]],
+            queue_time=_extract_field_by_index(output, "queue_time", i),
+            forward_entry_time=_extract_field_by_index(output, "forward_entry_time", i),
+            prefill_launch_delay=_extract_field_by_index(
+                output, "prefill_launch_delay", i
+            ),
+            prefill_launch_latency=_extract_field_by_index(
+                output, "prefill_launch_latency", i
+            ),
+            prefill_finished_ts=_extract_field_by_index(
+                output, "prefill_finished_ts", i
+            ),
+            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_bootstrap_queue_duration", i
+            ),
+            pd_prefill_forward_duration=_extract_field_by_index(
+                output, "pd_prefill_forward_duration", i
+            ),
+            pd_prefill_transfer_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_transfer_queue_duration", i
+            ),
+            pd_decode_prealloc_duration=_extract_field_by_index(
+                output, "pd_decode_prealloc_duration", i
+            ),
+            pd_decode_transfer_duration=_extract_field_by_index(
+                output, "pd_decode_transfer_duration", i
+            ),
+            pd_decode_forward_duration=_extract_field_by_index(
+                output, "pd_decode_forward_duration", i
+            ),
+            pd_bootstrap_duration=_extract_field_by_index(
+                output, "pd_bootstrap_duration", i
+            ),
+            pd_alloc_waiting_duration=_extract_field_by_index(
+                output, "pd_alloc_waiting_duration", i
+            ),
+            pd_transfer_speed_gb_s=_extract_field_by_index(
+                output, "pd_transfer_speed_gb_s", i
+            ),
+            pd_transfer_total_mb=_extract_field_by_index(
+                output, "pd_transfer_total_mb", i
+            ),
+            pd_prefill_retry_count=_extract_field_by_index(
+                output, "pd_prefill_retry_count", i
+            ),
             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
             embeddings=_extract_field_by_index(output, "embeddings", i),
             prompt_tokens=_extract_field_by_index(output, "prompt_tokens", i),
@@ -238,6 +315,39 @@ def _handle_output_by_index(output, i):
             ),
             prefill_finished_ts=_extract_field_by_index(
                 output, "prefill_finished_ts", i
+            ),
+            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_bootstrap_queue_duration", i
+            ),
+            pd_prefill_forward_duration=_extract_field_by_index(
+                output, "pd_prefill_forward_duration", i
+            ),
+            pd_prefill_transfer_queue_duration=_extract_field_by_index(
+                output, "pd_prefill_transfer_queue_duration", i
+            ),
+            pd_decode_prealloc_duration=_extract_field_by_index(
+                output, "pd_decode_prealloc_duration", i
+            ),
+            pd_decode_transfer_duration=_extract_field_by_index(
+                output, "pd_decode_transfer_duration", i
+            ),
+            pd_decode_forward_duration=_extract_field_by_index(
+                output, "pd_decode_forward_duration", i
+            ),
+            pd_bootstrap_duration=_extract_field_by_index(
+                output, "pd_bootstrap_duration", i
+            ),
+            pd_alloc_waiting_duration=_extract_field_by_index(
+                output, "pd_alloc_waiting_duration", i
+            ),
+            pd_transfer_speed_gb_s=_extract_field_by_index(
+                output, "pd_transfer_speed_gb_s", i
+            ),
+            pd_transfer_total_mb=_extract_field_by_index(
+                output, "pd_transfer_total_mb", i
+            ),
+            pd_prefill_retry_count=_extract_field_by_index(
+                output, "pd_prefill_retry_count", i
             ),
             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
             output_strs=_extract_field_by_index(output, "output_strs", i),
@@ -523,6 +633,60 @@ def monkey_patch_uvicorn_multiprocessing(timeout: float = 10):
         logger.warning(
             "uvicorn.supervisors.multiprocess not found, skipping monkey patch"
         )
+
+    # Fix stdin fd issue when running under Ray (or other managed
+    # environments where stdin may not be a real terminal):
+    #
+    # Uvicorn's get_subprocess() captures sys.stdin.fileno() in the parent
+    # and passes it to spawn'd children, which call os.fdopen(stdin_fileno)
+    # to re-attach stdin.  This is intended for interactive debugging (e.g.
+    # pdb attach to a child worker).
+    #
+    # In Ray Actors, sys.stdin.fileno() succeeds in the parent (returns a
+    # valid fd number), but the fd is not inheritable across spawn.  The
+    # child's os.fdopen() then crashes with OSError: [Errno 9] Bad file
+    # descriptor, killing every tokenizer worker.
+    #
+    # Instead of unconditionally disabling stdin passthrough, we probe
+    # whether the fd is truly usable by dup'ing it.  If os.dup() fails,
+    # the fd won't survive spawn either, so we fall back to None.  In a
+    # normal terminal environment os.dup() succeeds and debugging ability
+    # is preserved.
+    try:
+        import uvicorn._subprocess as _uv_sub
+        import uvicorn.supervisors.multiprocess as _uv_mp
+
+        def _safe_get_stdin_fileno():
+            """Return stdin fileno only if it is genuinely usable."""
+            try:
+                fileno = sys.stdin.fileno()
+                # Verify the fd is valid and duplicable — if it isn't,
+                # spawn'd children won't be able to reopen it either.
+                dup_fd = os.dup(fileno)
+                os.close(dup_fd)
+                return fileno
+            except (AttributeError, OSError):
+                return None
+
+        def _patched_get_subprocess(config, target, sockets):
+            stdin_fileno = _safe_get_stdin_fileno()
+            kwargs = {
+                "config": config,
+                "target": target,
+                "sockets": sockets,
+                "stdin_fileno": stdin_fileno,
+            }
+            return _uv_sub.spawn.Process(
+                target=_uv_sub.subprocess_started, kwargs=kwargs
+            )
+
+        # Must patch both: the supervisor module caches its own reference
+        # to get_subprocess at import time via
+        # ``from uvicorn._subprocess import get_subprocess``.
+        _uv_sub.get_subprocess = _patched_get_subprocess
+        _uv_mp.get_subprocess = _patched_get_subprocess
+    except Exception:
+        pass
 
 
 class SenderWrapper:
