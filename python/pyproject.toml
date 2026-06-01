@@ -23,6 +23,7 @@ dependencies = [
   "build",
   "compressed-tensors",
   "cuda-python>=13.0",
+  "deep_ep",
   "decord2 ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'armv7l')",
   "datasets",
   "einops",
@@ -88,6 +89,9 @@ dependencies = [
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+[tool.uv.sources]
+deep_ep = { git = "https://github.com/deepseek-ai/DeepEP", rev = "v1.2.1" }
 
 [project.optional-dependencies]
 checkpoint-engine = ["checkpoint-engine==0.1.2"]
@@ -162,6 +166,7 @@ all = [
 ]
 
 [tool.uv.extra-build-dependencies]
+deep-ep = ["torch==2.11.0+cu130"]
 st-attn = ["torch", "setuptools"]
 vsa = ["torch", "setuptools"]
 
