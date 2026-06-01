@@ -30,6 +30,7 @@ dependencies = [
   "fastapi",
   "flashinfer_python==0.6.11.post1", # keep it aligned with jit-cache version in Dockerfile
   "flashinfer_cubin==0.6.11.post1",
+  "flashinfer-jit-cache==0.6.11.post1+cu130",
   "gguf",
   "interegular",
   "llguidance>=0.7.11,<0.8.0",
@@ -90,8 +91,14 @@ name = "pypi"
 url = "https://pypi.org/simple"
 default = true
 
+[[tool.uv.index]]
+name = "flashinfer-cu130"
+url = "https://flashinfer.ai/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
 deep_ep = { git = "https://github.com/deepseek-ai/DeepEP", rev = "v1.2.1" }
+flashinfer-jit-cache = { index = "flashinfer-cu130" }
 
 [project.optional-dependencies]
 checkpoint-engine = ["checkpoint-engine==0.1.2"]
