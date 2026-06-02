@@ -64,6 +64,9 @@ class SamplingParams:
         stream_interval: Optional[int] = None,
         logit_bias: Optional[Dict[str, float]] = None,
         sampling_seed: Optional[int] = None,
+        repeat_min_count: int = 0,
+        repeat_min_length: int = 1,
+        repeat_max_length: Optional[int] = None,
     ) -> None:
         # For non-optional params, treat None as "use default" so that callers
         # (e.g. /generate) can pass null without crashing verify().
@@ -108,6 +111,11 @@ class SamplingParams:
         self.stream_interval = stream_interval
         self.logit_bias = logit_bias
         self.sampling_seed = sampling_seed
+        self.repeat_min_count = repeat_min_count if repeat_min_count is not None else 0
+        self.repeat_min_length = (
+            repeat_min_length if repeat_min_length is not None else 1
+        )
+        self.repeat_max_length = repeat_max_length
 
         # Process some special cases
         if 0 <= self.temperature < _SAMPLING_EPS:
@@ -132,12 +140,11 @@ class SamplingParams:
             )
         if not -2.0 <= self.frequency_penalty <= 2.0:
             raise ValueError(
-                "frequency_penalty must be in [-2, 2], got "
-                f"{self.frequency_penalty}."
+                f"frequency_penalty must be in [-2, 2], got {self.frequency_penalty}."
             )
         if not -2.0 <= self.presence_penalty <= 2.0:
             raise ValueError(
-                "presence_penalty must be in [-2, 2], got " f"{self.presence_penalty}."
+                f"presence_penalty must be in [-2, 2], got {self.presence_penalty}."
             )
         if not 0.0 < self.repetition_penalty <= 2.0:
             raise ValueError(
@@ -166,6 +173,18 @@ class SamplingParams:
                         f"logit_bias must has keys in [0, {vocab_size - 1}], got "
                         f"{token_id}."
                     )
+
+        if self.repeat_min_length < 1:
+            raise ValueError(
+                f"repeat_min_length must be at least 1, got {self.repeat_min_length}."
+            )
+        if self.repeat_max_length is not None and (
+            self.repeat_max_length < self.repeat_min_length
+        ):
+            raise ValueError(
+                "repeat_max_length must be None or >= repeat_min_length "
+                f"({self.repeat_min_length}), got {self.repeat_max_length}."
+            )
 
         grammars = [
             self.json_schema,

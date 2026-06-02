@@ -185,6 +185,18 @@ class FINISH_LENGTH(BaseFinishReason):
         }
 
 
+class FINISH_REPEAT(BaseFinishReason):
+    def __init__(self, repeat_length: int):
+        super().__init__()
+        self.repeat_length = repeat_length
+
+    def to_json(self):
+        return {
+            "type": "stop",  # to match OpenAI API's return value
+            "repeat_length": self.repeat_length,
+        }
+
+
 class FINISH_ABORT(BaseFinishReason):
     def __init__(self, message=None, status_code=None, err_type=None):
         super().__init__(is_error=True)
@@ -916,6 +928,19 @@ class Req(ReqDllmMixin):
         # For hisparse
         self.hisparse_staging = False
 
+        if self.sampling_params.repeat_min_count > 1:
+            # Lazy import: utils transitively imports schedule_batch (Req), so a
+            # top-level import here would create a circular import.
+            from sglang.srt.managers.utils import RollingHashState
+
+            self.rolling_hash_state = RollingHashState(
+                min_count=self.sampling_params.repeat_min_count,
+                min_repeat_length=self.sampling_params.repeat_min_length,
+                max_repeat_length=self.sampling_params.repeat_max_length,
+            )
+        else:
+            self.rolling_hash_state = None
+
     @property
     def seqlen(self) -> int:
         """Get the current sequence length of the request."""
@@ -945,9 +970,9 @@ class Req(ReqDllmMixin):
 
     def pop_committed_kv_cache(self) -> int:
         """Return the length of committed KV cache and mark them as freed."""
-        assert (
-            not self.kv_committed_freed
-        ), f"Committed KV cache already freed ({self.kv_committed_len=})"
+        assert not self.kv_committed_freed, (
+            f"Committed KV cache already freed ({self.kv_committed_len=})"
+        )
         self.kv_committed_freed = True
         return self._cache_commit_len()
 
@@ -957,9 +982,9 @@ class Req(ReqDllmMixin):
         # NOTE: This function is called when there is over-allocation of KV cache.
         # Over-allocation: we allocate more KV cache than the committed length.
         # e.g., speculative decoding may allocate more KV cache than actually used.
-        assert (
-            not self.kv_overallocated_freed
-        ), f"Overallocated KV cache already freed, {self.kv_committed_len=}, {self.kv_allocated_len=}"
+        assert not self.kv_overallocated_freed, (
+            f"Overallocated KV cache already freed, {self.kv_committed_len=}, {self.kv_allocated_len=}"
+        )
         self.kv_overallocated_freed = True
         return self._cache_commit_len(), self.kv_allocated_len
 
@@ -1210,6 +1235,15 @@ class Req(ReqDllmMixin):
 
         return False
 
+    def _check_repetition_penalty_finish(self):
+        if self.rolling_hash_state is None:
+            return False
+        assert len(self.output_ids) > self.rolling_hash_state.current_length
+        if repeat_length := self.rolling_hash_state.has_repeat(self.output_ids):
+            self.finished_reason = FINISH_REPEAT(repeat_length=repeat_length)
+            return True
+        return False
+
     def check_finished(self, new_accepted_len: int = 1):
         if self.finished():
             return
@@ -1240,6 +1274,9 @@ class Req(ReqDllmMixin):
             return
 
         if self._check_str_based_finish():
+            return
+
+        if self._check_repetition_penalty_finish():
             return
 
     def reset_for_retract(self):
@@ -1644,9 +1681,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         else:
             self.encoder_out_cache_loc = torch.cat(encoder_out_cache_loc)
 
-        assert (
-            len(self.out_cache_loc) == self.extend_num_tokens
-        ), f"Expected {len(self.out_cache_loc)}, got {self.extend_num_tokens}"
+        assert len(self.out_cache_loc) == self.extend_num_tokens, (
+            f"Expected {len(self.out_cache_loc)}, got {self.extend_num_tokens}"
+        )
 
         if self.extend_input_logprob_token_ids is not None:
             new_token_ids_parts = []
@@ -1949,9 +1986,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         if get_global_server_args().enable_mis and any(
             r.multi_item_delimiter_indices is not None for r in reqs
         ):
-            assert all(
-                r.multi_item_delimiter_indices is not None for r in reqs
-            ), "MIS batch must have delimiter indices on every request"
+            assert all(r.multi_item_delimiter_indices is not None for r in reqs), (
+                "MIS batch must have delimiter indices on every request"
+            )
             self.multi_item_delimiter_indices = [
                 torch.tensor(r.multi_item_delimiter_indices, dtype=torch.int64)
                 for r in reqs
@@ -2234,9 +2271,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         new_estimate_ratio = (
             total_decoded_tokens
             + envs.SGLANG_RETRACT_DECODE_STEPS.get() * len(self.reqs)
-        ) / (
-            total_max_new_tokens + 1
-        )  # avoid zero division
+        ) / (total_max_new_tokens + 1)  # avoid zero division
         new_estimate_ratio = min(1.0, new_estimate_ratio)
 
         return retracted_reqs, new_estimate_ratio, reqs_to_abort
@@ -2718,9 +2753,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         sliding_window_size = self.tree_cache.sliding_window_size
 
         # For swa radix cache, we need to evict the tokens that are not in the tree cache and also not in the sliding window
-        assert (
-            req.cache_protected_len % self.tree_cache.page_size == 0
-        ), "cache_protected_len must be page aligned"
+        assert req.cache_protected_len % self.tree_cache.page_size == 0, (
+            "cache_protected_len must be page aligned"
+        )
         req.swa_evicted_seqlen = max(req.swa_evicted_seqlen, req.cache_protected_len)
 
         # Subtract an extra page_size so the eviction frontier never reaches the

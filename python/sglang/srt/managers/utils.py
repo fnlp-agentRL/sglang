@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import TYPE_CHECKING, List, Optional, Union
+from array import array
+from typing import TYPE_CHECKING, List, Optional, Sequence, Union
 
 import torch
 
@@ -235,3 +236,82 @@ def get_alloc_len_per_decode(server_args: Optional[ServerArgs] = None) -> int:
         raise NotImplementedError(
             "get_alloc_len_per_decode not implemented for page_size > 1 and spec_topk > 1"
         )
+
+
+BASES = (131, 137)
+MODS = ((1 << 61) - 1, (1 << 31) - 1)
+POWER_TABLES = [array("q", [1]) for _ in MODS]  # post-mod powers, fit "q"
+
+
+class RollingHashState:
+    def __init__(
+        self,
+        min_count: int,
+        min_repeat_length: int = 1,
+        max_repeat_length: int | None = None,
+    ) -> None:
+        # Signed 64-bit array: all stored values are post-mod, in [0, 2**61 - 1),
+        # so they fit "q" and use ~8 bytes each (vs ~28 + a pointer for boxed
+        # ints in a list), giving lower memory and better cache locality.
+        self.prefix_hashes = [array("q", [0]) for _ in MODS]  # length n + 1
+        self.current_length = 0
+        self.min_count = min_count
+        self.min_repeat_length = min_repeat_length
+        self.max_repeat_length = max_repeat_length
+        self.start = 0
+        self.window_size = (self.max_repeat_length or float("inf")) * self.min_count
+
+    def extend(self, token_ids: Sequence[int], new_length: int) -> None:
+        for hash_values, base, mod in zip(self.prefix_hashes, BASES, MODS):
+            for i in range(self.current_length, new_length):
+                hash_values.append((hash_values[-1] * base + token_ids[i] + 1) % mod)
+        self.current_length = new_length
+
+        stored_length = self.current_length - self.start
+
+        if stored_length > self.window_size * 2 + 1:
+            for hash_values in self.prefix_hashes:
+                del hash_values[: self.window_size]
+            self.start += self.window_size
+
+    @staticmethod
+    def grow_powers(new_length: int) -> None:
+        for power_table, base, mod in zip(POWER_TABLES, BASES, MODS):
+            while len(power_table) <= new_length:
+                power_table.append(power_table[-1] * base % mod)
+
+    def _equal_substrings(self, a: int, b: int, length: int) -> bool:
+        """Whether token_ids[a:a+length] == token_ids[b:b+length], via rolling hash."""
+        if length == 0:
+            return True
+        a -= self.start
+        b -= self.start
+        for prefix_hashes, power_table, mod in zip(
+            self.prefix_hashes, POWER_TABLES, MODS
+        ):
+            power = power_table[length]
+            ha = (prefix_hashes[a + length] - prefix_hashes[a] * power) % mod
+            hb = (prefix_hashes[b + length] - prefix_hashes[b] * power) % mod
+            if ha != hb:
+                return False
+        return True
+
+    def has_repeat(
+        self,
+        token_ids: Sequence[int],
+    ) -> int:
+        self.extend(token_ids, len(token_ids))
+        self.grow_powers(min(len(token_ids), self.window_size * 2 + 1))
+
+        upper = len(token_ids) // self.min_count
+        if self.max_repeat_length is not None:
+            upper = min(upper, self.max_repeat_length)
+
+        for length in range(self.min_repeat_length, upper + 1):
+            last = len(token_ids) - length  # absolute start of the final block
+            if all(
+                self._equal_substrings(last, len(token_ids) - j * length, length)
+                for j in range(2, self.min_count + 1)
+            ):
+                return length
+        return 0
