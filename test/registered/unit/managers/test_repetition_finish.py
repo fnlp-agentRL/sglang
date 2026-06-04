@@ -68,7 +68,7 @@ class TestRepetitionFinish(CustomTestCase):
         self.assertTrue(req.finished())
         self.assertEqual(
             req.finished_reason.to_json(),
-            {"type": "stop", "repeat_length": 2},
+            {"type": "repeat", "repeat_length": 2},
         )
 
     def test_single_token_repeat(self):

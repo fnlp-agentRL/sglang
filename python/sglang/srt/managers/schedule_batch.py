@@ -192,7 +192,7 @@ class FINISH_REPEAT(BaseFinishReason):
 
     def to_json(self):
         return {
-            "type": "stop",  # to match OpenAI API's return value
+            "type": "repeat",
             "repeat_length": self.repeat_length,
         }
 
