@@ -137,6 +137,33 @@ class TestRepetitionFinish(CustomTestCase):
         self.assertTrue(fired)
         self.assertEqual(req.finished_reason.repeat_length, 2)
 
+    def test_retract_with_input_embeds_resets_state(self):
+        # When an input_embeds request is retracted, output_ids is discarded.
+        # The rolling hash state must be rebuilt; otherwise its stale
+        # current_length outlives the output it described and the next check
+        # either trips the growth assert or reads stale hashes.
+        req = self._make_req(repeat_min_count=3)
+        req.input_embeds = [[0.0]]  # mark as an input_embeds request
+
+        for token in [1, 2, 3, 4, 5]:
+            req.output_ids.append(token)
+            self.assertFalse(req._check_repetition_penalty_finish())
+        self.assertEqual(req.rolling_hash_state.current_length, 5)
+
+        req.reset_for_retract()
+
+        self.assertEqual(req.output_ids, [])
+        self.assertEqual(req.rolling_hash_state.current_length, 0)
+        self.assertEqual(req.rolling_hash_state.start, 0)
+
+        # Re-generation starts clean: no stale-state crash, detection still works.
+        fired = False
+        for token in [8, 9, 8, 9, 8, 9]:  # [8, 9] x3
+            req.output_ids.append(token)
+            fired = req._check_repetition_penalty_finish()
+        self.assertTrue(fired)
+        self.assertEqual(req.finished_reason.repeat_length, 2)
+
     def test_assert_requires_output_growth(self):
         # has_repeat extends the rolling hash incrementally, so each call must
         # see at least one new token. Re-checking at the same length is a bug

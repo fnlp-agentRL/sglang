@@ -928,18 +928,7 @@ class Req(ReqDllmMixin):
         # For hisparse
         self.hisparse_staging = False
 
-        if self.sampling_params.repeat_min_count > 1:
-            # Lazy import: utils transitively imports schedule_batch (Req), so a
-            # top-level import here would create a circular import.
-            from sglang.srt.managers.utils import RollingHashState
-
-            self.rolling_hash_state = RollingHashState(
-                min_count=self.sampling_params.repeat_min_count,
-                min_repeat_length=self.sampling_params.repeat_min_length,
-                max_repeat_length=self.sampling_params.repeat_max_length,
-            )
-        else:
-            self.rolling_hash_state = None
+        self.init_rolling_hash_state()
 
     @property
     def seqlen(self) -> int:
@@ -1235,6 +1224,18 @@ class Req(ReqDllmMixin):
 
         return False
 
+    def init_rolling_hash_state(self):
+        if self.sampling_params.repeat_min_count > 1:
+            from sglang.srt.managers.utils import RollingHashState
+
+            self.rolling_hash_state = RollingHashState(
+                min_count=self.sampling_params.repeat_min_count,
+                min_repeat_length=self.sampling_params.repeat_min_length,
+                max_repeat_length=self.sampling_params.repeat_max_length,
+            )
+        else:
+            self.rolling_hash_state = None
+
     def _check_repetition_penalty_finish(self):
         if self.rolling_hash_state is None:
             return False
@@ -1320,6 +1321,10 @@ class Req(ReqDllmMixin):
         # to ensure shape consistency in KV cache.
         if self.input_embeds is not None:
             self.output_ids = []
+            # Discarding output_ids invalidates the repetition-detection state,
+            # whose cached prefix hashes / current_length still describe the old
+            # (now-gone) output. Rebuild it so re-generation starts clean.
+            self.init_rolling_hash_state()
 
     def offload_kv_cache(self, req_to_token_pool, token_to_kv_pool_allocator):
         token_indices = req_to_token_pool.req_to_token[
