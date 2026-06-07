@@ -174,9 +174,11 @@ class BaseTopkCapturer:
             forward_batch, can_run_graph, cuda_graph_batch
         )
         if no_copy_to_cpu:
+            # Snapshot the forward result before later speculative draft forwards
+            # reuse the shared device cache buffer.
             return TopkCaptureOutput(
-                out_cache_loc=forward_batch.out_cache_loc,
-                topk=slice_gpu,
+                out_cache_loc=forward_batch.out_cache_loc.clone(),
+                topk=slice_gpu.clone(),
                 host_cache=self.host_cache,
             )
         out_cache_loc_cpu = forward_batch.out_cache_loc.cpu()
