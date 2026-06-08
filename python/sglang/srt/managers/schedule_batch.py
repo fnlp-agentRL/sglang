@@ -1225,22 +1225,37 @@ class Req(ReqDllmMixin):
         return False
 
     def init_rolling_hash_state(self):
-        if self.sampling_params.repeat_min_count > 1:
-            from sglang.srt.managers.utils import RollingHashState
+        from sglang.srt.managers.utils import RollingHashState
 
-            self.rolling_hash_state = RollingHashState(
-                min_count=self.sampling_params.repeat_min_count,
-                min_repeat_length=self.sampling_params.repeat_min_length,
-                max_repeat_length=self.sampling_params.repeat_max_length,
-            )
-        else:
-            self.rolling_hash_state = None
+        # TODO: hard coded rolling hashstate params
+        self.rolling_hash_state = RollingHashState(
+            min_count=10,
+            min_repeat_length=36,
+            max_repeat_length=512,
+        )
+        # if self.sampling_params.repeat_min_count > 1:
+        #     from sglang.srt.managers.utils import RollingHashState
+
+        #     self.rolling_hash_state = RollingHashState(
+        #         min_count=self.sampling_params.repeat_min_count,
+        #         min_repeat_length=self.sampling_params.repeat_min_length,
+        #         max_repeat_length=self.sampling_params.repeat_max_length,
+        #     )
+        #     logger.warning(
+        #         f"rolling hash state enable, min count is {self.sampling_params.repeat_min_count}, min_repeat_length is {self.sampling_params.repeat_min_length}, max_repeat_length is {self.sampling_params.repeat_max_length}"
+        #     )
+        # else:
+        #     self.rolling_hash_state = None
+        #     logger.warning(
+        #         f"NO ROLLING HASH STATE！！！min count is {self.sampling_params.repeat_min_count}, min_repeat_length is {self.sampling_params.repeat_min_length}, max_repeat_length is {self.sampling_params.repeat_max_length}"
+        #     )
 
     def _check_repetition_penalty_finish(self):
         if self.rolling_hash_state is None:
             return False
         assert len(self.output_ids) > self.rolling_hash_state.current_length
-        if repeat_length := self.rolling_hash_state.has_repeat(self.output_ids):
+        if (repeat_length := self.rolling_hash_state.has_repeat(self.output_ids)) > 0:
+            logger.warning(f"There is a repeat req with repeat length {repeat_length}")
             self.finished_reason = FINISH_REPEAT(repeat_length=repeat_length)
             return True
         return False

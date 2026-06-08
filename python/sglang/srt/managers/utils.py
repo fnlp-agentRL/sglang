@@ -280,10 +280,15 @@ class RollingHashState:
             while len(power_table) <= new_length:
                 power_table.append(power_table[-1] * base % mod)
 
-    def _equal_substrings(self, a: int, b: int, length: int) -> bool:
+    def _equal_substrings(
+        self, token_ids: Sequence[int], a: int, b: int, length: int
+    ) -> bool:
         """Whether token_ids[a:a+length] == token_ids[b:b+length], via rolling hash."""
         if length == 0:
             return True
+        probe = min(3, length)
+        if any(token_ids[a + i] != token_ids[b + i] for i in range(probe)):
+            return False
         a -= self.start
         b -= self.start
         for prefix_hashes, power_table, mod in zip(
@@ -310,7 +315,9 @@ class RollingHashState:
         for length in range(self.min_repeat_length, upper + 1):
             last = len(token_ids) - length  # absolute start of the final block
             if all(
-                self._equal_substrings(last, len(token_ids) - j * length, length)
+                self._equal_substrings(
+                    token_ids, last, len(token_ids) - j * length, length
+                )
                 for j in range(2, self.min_count + 1)
             ):
                 return length
