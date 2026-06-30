@@ -1231,7 +1231,7 @@ class Req(ReqDllmMixin):
         self.rolling_hash_state = RollingHashState(
             min_count=10,
             min_repeat_length=36,
-            max_repeat_length=2048,
+            max_repeat_length=4096,
         )
         # if self.sampling_params.repeat_min_count > 1:
         #     from sglang.srt.managers.utils import RollingHashState
